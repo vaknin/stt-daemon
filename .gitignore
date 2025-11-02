@@ -1,0 +1,36 @@
+# Rust build artifacts
+/target/
+Cargo.lock
+
+# Model downloads and caches
+*.tar.gz
+*.onnx
+models/
+
+# Environment variables and secrets
+.env
+.env.local
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Debug and profiling
+*.profraw
+*.profdata
+perf.data
+flamegraph.svg
+
+# Log files
+*.log
+
+# Backup files
+*.bak
+*.tmp
+
+# OS-specific
+Thumbs.db

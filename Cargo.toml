@@ -1,0 +1,26 @@
+[package]
+name = "stt-daemon"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Audio recording
+cpal = "0.16.0"
+rubato = "0.16.2"
+
+# Voice activity detection
+vad-rs = { git = "https://github.com/cjpais/vad-rs", default-features = false }
+
+# Transcription
+transcribe-rs = "0.1.1"
+
+# Keyboard input/paste
+signal-hook = "0.3"
+
+# Utilities
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.11"
+reqwest = { version = "0.11", features = ["blocking"] }
+tar = "0.4"
+flate2 = "1.0"
