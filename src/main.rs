@@ -7,11 +7,14 @@ use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use transcribe_rs::{
-    engines::parakeet::{ParakeetEngine, ParakeetInferenceParams, ParakeetModelParams, TimestampGranularity},
+    engines::parakeet::{
+        ParakeetEngine, ParakeetInferenceParams, ParakeetModelParams, TimestampGranularity,
+    },
     TranscriptionEngine,
 };
 
@@ -38,8 +41,7 @@ struct App {
 impl App {
     fn new() -> Result<Self> {
         // Set up model directory
-        let home = std::env::var("HOME").context("HOME not set")?;
-        let model_dir = PathBuf::from(home).join(".handy-simple/models");
+        let model_dir = PathBuf::from_str("models/").unwrap();
         fs::create_dir_all(&model_dir)?;
         let model_path = model_dir.join(MODEL_NAME);
         let vad_model_path = model_dir.join(VAD_MODEL_NAME);
@@ -125,11 +127,13 @@ impl App {
         let mut state = self.state.lock().unwrap();
         match *state {
             RecordingState::Idle => {
+                info!("State: Idle -> Recording");
                 *state = RecordingState::Recording;
                 self.audio_buffer.lock().unwrap().clear();
                 self.start_audio_capture()?;
             }
             RecordingState::Recording => {
+                info!("State: Recording -> Idle");
                 *state = RecordingState::Idle;
                 drop(state);
                 self.process_and_paste()?;
@@ -161,6 +165,8 @@ impl App {
         let device = host
             .default_input_device()
             .context("No input device available")?;
+
+        info!("Using input device: {}", device.name().unwrap_or_default());
 
         let config = self.get_preferred_config(&device)?;
         let sample_rate = config.sample_rate().0;
@@ -234,19 +240,29 @@ impl App {
         let audio_data = self.audio_buffer.lock().unwrap().clone();
         let sample_rate = *self.audio_sample_rate.lock().unwrap();
 
+        info!(
+            "Processing audio: {} samples at {}Hz",
+            audio_data.len(),
+            sample_rate
+        );
+
         if audio_data.is_empty() {
+            info!("Audio buffer is empty");
             return Ok(());
         }
 
         let resampled = if sample_rate != SAMPLE_RATE {
+            info!("Resampling from {}Hz to {}Hz...", sample_rate, SAMPLE_RATE);
             self.resample_audio(&audio_data, sample_rate, SAMPLE_RATE)?
         } else {
             audio_data
         };
 
         let mut filtered = self.apply_vad(&resampled)?;
+        info!("After VAD: {} samples", filtered.len());
 
         if filtered.is_empty() {
+            info!("No speech detected (VAD filtered everything)");
             return Ok(());
         }
 
@@ -255,14 +271,19 @@ impl App {
             filtered.resize(min_samples, 0.0);
         }
 
+        info!("Transcribing...");
         let text = self.transcribe(&filtered)?;
+        info!("Transcription result: '{}'", text);
 
         if text.is_empty() || text == "[Music]" || text.trim().is_empty() {
+            info!("Transcription ignored (empty or filtered)");
             return Ok(());
         }
 
         let text_with_space = format!("{} ", text);
+        info!("Pasting text...");
         self.paste_text(&text_with_space)?;
+        info!("Paste complete!");
 
         Ok(())
     }
@@ -296,7 +317,8 @@ impl App {
             let mut last_chunk = audio[pos..].to_vec();
             last_chunk.resize(chunk_size, 0.0);
             let resampled = resampler.process(&[last_chunk], None)?;
-            let valid_samples = ((audio.len() - pos) as f64 * to_rate as f64 / from_rate as f64) as usize;
+            let valid_samples =
+                ((audio.len() - pos) as f64 * to_rate as f64 / from_rate as f64) as usize;
             output.extend_from_slice(&resampled[0][..valid_samples]);
         }
 
@@ -389,7 +411,9 @@ impl App {
         // Send Ctrl+Shift+V using wtype (Wayland keyboard simulation)
         // Press modifiers, press+release v, then release modifiers
         Command::new("wtype")
-            .args(["-M", "ctrl", "-M", "shift", "-P", "v", "-p", "v", "-m", "shift", "-m", "ctrl"])
+            .args([
+                "-M", "ctrl", "-M", "shift", "-P", "v", "-p", "v", "-m", "shift", "-m", "ctrl",
+            ])
             .status()
             .context("Failed to execute wtype")?;
 
@@ -397,9 +421,7 @@ impl App {
 
         // Restore clipboard using wl-copy (ignore errors as clipboard manager may timeout)
         if !old_clipboard.is_empty() {
-            let child = Command::new("wl-copy")
-                .stdin(Stdio::piped())
-                .spawn();
+            let child = Command::new("wl-copy").stdin(Stdio::piped()).spawn();
 
             if let Ok(mut child) = child {
                 if let Some(mut stdin) = child.stdin.take() {
@@ -433,19 +455,24 @@ impl App {
     fn run(&self) -> Result<()> {
         info!("Speech-to-text daemon started");
 
-        let mut signals = Signals::new(&[SIGUSR1])
-            .context("Failed to register signal handler")?;
+        let mut signals = Signals::new(&[SIGUSR1]).context("Failed to register signal handler")?;
 
         let mut last_process_time = Instant::now() - Duration::from_secs(1);
 
         for sig in signals.forever() {
             if sig == SIGUSR1 {
+                info!("Received SIGUSR1 signal");
                 if last_process_time.elapsed() < Duration::from_millis(300) {
+                    info!(
+                        "Debouncing signal (elapsed: {:?})",
+                        last_process_time.elapsed()
+                    );
                     continue;
                 }
 
+                info!("Toggling recording state...");
                 if let Err(e) = self.toggle_recording() {
-                    error!("Error: {}", e);
+                    error!("Error toggling recording: {}", e);
                 }
 
                 last_process_time = Instant::now();

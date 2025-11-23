@@ -13,9 +13,11 @@ A minimal, CLI-only speech-to-text tool for Linux. Press a shortcut, speak, pres
 
 ## Requirements
 
-- Linux
+- Linux (Wayland)
 - Rust (latest stable)
 - Microphone
+- `wl-clipboard` (for clipboard manipulation)
+- `wtype` (for keyboard simulation)
 
 ## Installation
 
@@ -38,11 +40,11 @@ RUST_LOG=info ./target/release/stt-daemon
 
 ## How it works
 
-1. **Global hotkey**: Registers Mod+S shortcut using global-hotkey (properly consumes the key)
+1. **Global hotkey**: User configures window manager to send `SIGUSR1` to the daemon
 2. **Audio capture**: Records audio from default microphone at 16kHz using cpal
 3. **VAD filtering**: Silero VAD removes silence and noise, keeping only speech
 4. **Transcription**: Uses Parakeet TDT 0.6B V3 via transcribe-rs (cached for performance)
-5. **Paste**: Uses clipboard + Ctrl+Shift+V via enigo (restores clipboard after)
+5. **Paste**: Uses `wl-paste` to save clipboard, `wl-copy` to set text, and `wtype` to simulate Ctrl+Shift+V
 
 ## Model Storage
 
@@ -93,10 +95,28 @@ The model stays loaded in memory for instant response when you press the hotkey.
 ## Permissions
 
 On Linux, you may need to run with appropriate permissions for:
-- Global keyboard hotkeys (global-hotkey)
 - Audio device access (cpal)
-- Simulating keyboard input (enigo)
-- Clipboard access (arboard)
+- Wayland clipboard access (`wl-copy`, `wl-paste`)
+- Virtual keyboard input (`wtype`)
+
+## Troubleshooting
+
+If pressing the hotkey doesn't work:
+
+1.  **Check if the daemon is running**:
+    ```bash
+    pgrep -a stt-daemon
+    ```
+2.  **Run with logging enabled** to see what's happening:
+    ```bash
+    RUST_LOG=info ./target/release/stt-daemon
+    ```
+3.  **Manually trigger the signal** to verify the daemon receives it:
+    ```bash
+    pkill -USR1 stt-daemon
+    ```
+    You should see "Received SIGUSR1 signal" in the logs.
+4.  **Check audio**: If logs show "No speech detected", check your microphone input level.
 
 ## License
 

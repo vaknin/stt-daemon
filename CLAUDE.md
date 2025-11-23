@@ -32,11 +32,11 @@ cargo check
    - Model loaded into memory once at startup and cached for performance
    - VAD model (Silero VAD v4) loaded from same directory
 
-2. **Hotkey Registration** (`App::run()`):
-   - Uses `global-hotkey` crate to register Mod+S (Super+S) globally
+2. **Hotkey Handling** (`App::run()`):
+   - Uses `signal-hook` to listen for `SIGUSR1`
    - 300ms debouncing prevents double-triggers
-   - Events processed synchronously to prevent race conditions
-   - Queued events during processing are drained to prevent backlog
+   - Events processed synchronously in the main loop
+   - Designed to be triggered by window manager (e.g., `bind = $mainMod, s, exec, pkill -USR1 stt-daemon`)
 
 3. **Recording State Machine** (`toggle_recording()`):
    - `Idle` → `Recording`: Clears buffer, starts audio capture thread
@@ -60,10 +60,10 @@ cargo check
    - **Paste**: Clipboard manipulation + Ctrl+Shift+V keyboard simulation
 
 6. **Text Pasting** (`paste_text()`):
-   - Saves current clipboard contents
-   - Writes transcription to clipboard
-   - Simulates Ctrl+Shift+V using `enigo`
-   - Restores original clipboard (best effort)
+   - Saves current clipboard contents using `wl-paste`
+   - Writes transcription to clipboard using `wl-copy`
+   - Simulates Ctrl+Shift+V using `wtype`
+   - Restores original clipboard using `wl-copy` (best effort)
 
 ### Key Dependencies
 
@@ -73,13 +73,15 @@ cargo check
 - **vad-rs**: Voice activity detection (Silero VAD v4)
 - **cpal**: Cross-platform audio I/O
 - **rubato**: FFT-based audio resampling
-- **global-hotkey**: Global keyboard shortcuts
-- **enigo**: Keyboard input simulation for pasting
+- **signal-hook**: Handling Unix signals (SIGUSR1)
+- **External Tools**:
+  - `wl-clipboard`: Clipboard manipulation
+  - `wtype`: Wayland keyboard simulation
 - **arboard**: Clipboard access
 
 ### Threading Model
 
-- Main thread: Hotkey event loop with 100ms sleep
+- Main thread: Signal handling loop with 100ms sleep
 - Audio capture thread: Spawned per recording session, self-terminates when state returns to Idle
 - Synchronous processing: Transcription and pasting block the hotkey handler to prevent overlapping operations
 
