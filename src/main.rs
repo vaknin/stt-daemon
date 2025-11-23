@@ -39,16 +39,21 @@ struct App {
 }
 
 impl App {
-    fn new() -> Result<Self> {
+    fn new(signals: &mut Signals) -> Result<Self> {
         // Set up model directory
-        let model_dir = PathBuf::from_str("models/").unwrap();
+        let model_dir = PathBuf::from("models/");
+
         fs::create_dir_all(&model_dir)?;
         let model_path = model_dir.join(MODEL_NAME);
         let vad_model_path = model_dir.join(VAD_MODEL_NAME);
 
         // Download and extract model if needed
         if !model_path.exists() {
-            info!("Downloading Parakeet model...");
+            info!("Downloading Parakeet model to {:?}...", model_path);
+            // Check for pending signals during download
+            if signals.pending().any(|s| s == SIGUSR1) {
+                info!("Signal received during download - ignoring");
+            }
             Self::download_and_extract_model(&model_dir)?;
             info!("Model downloaded and extracted successfully!");
         }
@@ -178,47 +183,57 @@ impl App {
         thread::spawn(move || {
             let err_fn = |err| error!("Audio stream error: {}", err);
 
-            let stream = match config.sample_format() {
+            let stream_result = match config.sample_format() {
                 cpal::SampleFormat::F32 => {
                     let config: cpal::StreamConfig = config.into();
                     let audio_buffer_f32 = Arc::clone(&audio_buffer);
                     let state_f32 = Arc::clone(&state);
-                    device
-                        .build_input_stream(
-                            &config,
-                            move |data: &[f32], _: &_| {
-                                if *state_f32.lock().unwrap() == RecordingState::Recording {
-                                    audio_buffer_f32.lock().unwrap().extend_from_slice(data);
-                                }
-                            },
-                            err_fn,
-                            None,
-                        )
-                        .unwrap()
+                    device.build_input_stream(
+                        &config,
+                        move |data: &[f32], _: &_| {
+                            if *state_f32.lock().unwrap() == RecordingState::Recording {
+                                audio_buffer_f32.lock().unwrap().extend_from_slice(data);
+                            }
+                        },
+                        err_fn,
+                        None,
+                    )
                 }
                 cpal::SampleFormat::I16 => {
                     let config: cpal::StreamConfig = config.into();
                     let audio_buffer_i16 = Arc::clone(&audio_buffer);
                     let state_i16 = Arc::clone(&state);
-                    device
-                        .build_input_stream(
-                            &config,
-                            move |data: &[i16], _: &_| {
-                                if *state_i16.lock().unwrap() == RecordingState::Recording {
-                                    let f32_data: Vec<f32> =
-                                        data.iter().map(|&s| s as f32 / 32768.0).collect();
-                                    audio_buffer_i16.lock().unwrap().extend(f32_data);
-                                }
-                            },
-                            err_fn,
-                            None,
-                        )
-                        .unwrap()
+                    device.build_input_stream(
+                        &config,
+                        move |data: &[i16], _: &_| {
+                            if *state_i16.lock().unwrap() == RecordingState::Recording {
+                                let f32_data: Vec<f32> =
+                                    data.iter().map(|&s| s as f32 / 32768.0).collect();
+                                audio_buffer_i16.lock().unwrap().extend(f32_data);
+                            }
+                        },
+                        err_fn,
+                        None,
+                    )
                 }
-                _ => panic!("Unsupported sample format"),
+                _ => {
+                    error!("Unsupported sample format");
+                    return;
+                }
             };
 
-            stream.play().unwrap();
+            let stream = match stream_result {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Failed to build input stream: {}", e);
+                    return;
+                }
+            };
+
+            if let Err(e) = stream.play() {
+                error!("Failed to play stream: {}", e);
+                return;
+            }
 
             // Keep stream alive while recording
             loop {
@@ -406,8 +421,6 @@ impl App {
 
         child.wait().context("Failed to wait for wl-copy")?;
 
-        thread::sleep(Duration::from_millis(100));
-
         // Send Ctrl+Shift+V using wtype (Wayland keyboard simulation)
         // Press modifiers, press+release v, then release modifiers
         Command::new("wtype")
@@ -452,10 +465,8 @@ impl App {
         Ok(result.text.trim().to_string())
     }
 
-    fn run(&self) -> Result<()> {
+    fn run(&self, signals: &mut Signals) -> Result<()> {
         info!("Speech-to-text daemon started");
-
-        let mut signals = Signals::new(&[SIGUSR1]).context("Failed to register signal handler")?;
 
         let mut last_process_time = Instant::now() - Duration::from_secs(1);
 
@@ -486,8 +497,11 @@ impl App {
 fn main() -> Result<()> {
     env_logger::init();
 
-    let app = App::new()?;
-    app.run()?;
+    // Register signal handler immediately
+    let mut signals = Signals::new(&[SIGUSR1]).context("Failed to register signal handler")?;
+
+    let app = App::new(&mut signals)?;
+    app.run(&mut signals)?;
 
     Ok(())
 }
