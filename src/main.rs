@@ -40,8 +40,9 @@ struct App {
 
 impl App {
     fn new(signals: &mut Signals) -> Result<Self> {
-        // Set up model directory
-        let model_dir = PathBuf::from("models/");
+        // Set up model directory with an explicit path
+        let model_dir = PathBuf::from("/home/kivan/Projects/archive/stt-daemon/models");
+        info!("Using model directory: {:?}", model_dir);
 
         fs::create_dir_all(&model_dir)?;
         let model_path = model_dir.join(MODEL_NAME);
